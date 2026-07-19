@@ -12,13 +12,15 @@ let wsClient = null;
 const remoteCars = new Map(); // id -> { mesh, targetPos: Vector3, targetRotY, speed }
 // local skin color (hex). persisted in localStorage
 let localSkin = (typeof localStorage !== 'undefined' ? localStorage.getItem('car_color') : null) || '#ff3333';
+let localName = (typeof localStorage !== 'undefined' ? localStorage.getItem('player_name') : null) || ('Player' + Math.floor(Math.random()*90+10));
 
 function sendImmediateState() {
   if (!wsClient || wsClient.readyState !== WebSocket.OPEN || !clientId) return;
+  const nameToSend = (typeof localName === 'string') ? localName.trim().slice(0,10) : null;
   const msg = {
-    type: 'state', id: clientId, t: Date.now(), p: [state.pos.x, state.pos.y, state.pos.z], rotY: state.rotY, speed: state.speed, skin: localSkin
+    type: 'state', id: clientId, t: Date.now(), p: [state.pos.x, state.pos.y, state.pos.z], rotY: state.rotY, speed: state.speed, skin: localSkin, name: nameToSend
   };
-  try { wsClient.send(JSON.stringify(msg)); } catch (e) {}
+  try { console.debug('immediate send state', msg); wsClient.send(JSON.stringify(msg)); } catch (e) { console.warn('immediate send failed', e); }
 }
 
 function connectWS() {
@@ -65,6 +67,8 @@ function connectWS() {
       } else if (msg.type === 'update') {
         // update other players
         for (const p of msg.players) {
+          // debug: log incoming player names
+          try { console.debug('UPDATE player', p.id, 'name=', p.name, 'skin=', p.skin); } catch(e) {}
           if (p.id === clientId) continue; // skip self
           let rc = remoteCars.get(p.id);
           if (!rc) {
@@ -76,6 +80,8 @@ function connectWS() {
             rc = { mesh: g, targetPos: new THREE.Vector3(), targetRotY: 0, speed: 0 };
             // store reported skin
             try { rc.mesh.userData = rc.mesh.userData || {}; rc.mesh.userData.skin = remoteSkin; } catch(e){}
+            // apply reported name for remote players (create separate sprite)
+            try { if (p.name) setRemoteCarName(rc, p.name); } catch(e){}
             remoteCars.set(p.id, rc);
           }
           // if server/client didn't include proper Y, compute from world height
@@ -99,11 +105,26 @@ function connectWS() {
               rc.mesh.userData.skin = remoteSkin;
             }
           } catch (e) {}
+          // update remote name if it changed (use separate remote sprite)
+          try {
+            const remoteName = typeof p.name === 'string' ? p.name.trim().slice(0,10) : null;
+            if (rc && remoteName) {
+              setRemoteCarName(rc, remoteName);
+              // also store on mesh.userData for quick comparison
+              try { rc.mesh.userData = rc.mesh.userData || {}; rc.mesh.userData.name = remoteName; } catch(e){}
+            } else if (rc && !remoteName) {
+              // remove if null
+              disposeRemoteNameSprite(rc);
+              try { if (rc.mesh.userData) rc.mesh.userData.name = null; } catch(e){}
+            }
+          } catch (e) {}
         }
       } else if (msg.type === 'leave') {
         const id = msg.id;
         const rc = remoteCars.get(id);
         if (rc) {
+          // dispose remote name sprite textures if present
+          try { disposeRemoteNameSprite(rc); } catch (e) {}
           scene.remove(rc.mesh);
           remoteCars.delete(id);
         }
@@ -133,9 +154,10 @@ function startStateSender() {
       p: [state.pos.x, state.pos.y, state.pos.z],
       rotY: state.rotY,
       speed: state.speed,
-      skin: localSkin
+      skin: localSkin,
+      name: (typeof localName === 'string') ? localName.trim().slice(0,10) : null
     };
-    try { wsClient.send(JSON.stringify(msg)); } catch (e) {}
+    try { console.debug('sending state', msg); wsClient.send(JSON.stringify(msg)); } catch (e) { console.warn('send failed', e); }
   }, 66); // ~15Hz
 }
 
@@ -333,6 +355,99 @@ function applyTintToMesh(group, color) {
   } catch (e) { console.warn('applyTint failed', e); }
 }
 
+// create a simple name sprite from text (canvas texture)
+function makeNameSprite(name) {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  const fontSize = 48;
+  ctx.font = `${fontSize}px sans-serif`;
+  const padding = 12;
+  const text = (name || '').slice(0,10);
+  const metrics = ctx.measureText(text);
+  const textWidth = Math.ceil(metrics.width);
+  canvas.width = Math.max(64, textWidth + padding * 2);
+  canvas.height = fontSize + padding * 2;
+  // redraw with proper size
+  ctx.font = `${fontSize}px sans-serif`;
+  // background (semi-transparent)
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  const r = 8;
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+    ctx.fill();
+  }
+  roundRect(ctx, 0, 0, canvas.width, canvas.height, r);
+  // text
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.needsUpdate = true;
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true });
+  const sprite = new THREE.Sprite(mat);
+  // scale sprite to reasonable size in world units
+  const scaleFactor = 0.01; // adjust to taste
+  sprite.scale.set(canvas.width * scaleFactor, canvas.height * scaleFactor, 1);
+  return sprite;
+}
+
+// attach a floating name sprite for remote players (not added as child of the car group)
+function createRemoteNameSprite(name) {
+  try {
+    const sprite = makeNameSprite(name);
+    // initial position at origin; will be updated in animate loop
+    sprite.position.set(0, 2.2, 0);
+    sprite.userData = sprite.userData || {};
+    sprite.userData.nameText = (name||'').slice(0,10);
+    return sprite;
+  } catch (e) { console.warn('createRemoteNameSprite failed', e); return null; }
+}
+
+// update (or add) name sprite attached to a remote car record
+function setRemoteCarName(rc, name) {
+  if (!rc) return;
+  const safe = (typeof name === 'string') ? name.trim().slice(0,10) : '';
+  try {
+    // if exists and same, do nothing
+    if (rc.nameSprite && rc.nameSprite.userData && rc.nameSprite.userData.nameText === safe) return;
+    // remove old sprite
+    if (rc.nameSprite) {
+      try { scene.remove(rc.nameSprite); } catch (e) {}
+      try { if (rc.nameSprite.material && rc.nameSprite.material.map) rc.nameSprite.material.map.dispose(); } catch (e) {}
+      try { if (rc.nameSprite.material) rc.nameSprite.material.dispose(); } catch (e) {}
+      rc.nameSprite = null;
+    }
+    if (!safe) return;
+    const spr = createRemoteNameSprite(safe);
+    if (!spr) return;
+    // position above the car mesh (we'll update smoothly in animate)
+    spr.position.copy(rc.mesh.position).add(new THREE.Vector3(0, 2.2, 0));
+    scene.add(spr);
+    rc.nameSprite = spr;
+    try { console.debug('Created name sprite for', safe, 'for remote id=?'); } catch(e) {}
+  } catch (e) { console.warn('setRemoteCarName failed', e); }
+}
+
+// remove remote name sprite when car leaves
+function disposeRemoteNameSprite(rc) {
+  if (!rc) return;
+  try {
+    if (rc.nameSprite) {
+      try { scene.remove(rc.nameSprite); } catch (e) {}
+      try { if (rc.nameSprite.material && rc.nameSprite.material.map) rc.nameSprite.material.map.dispose(); } catch (e) {}
+      try { if (rc.nameSprite.material) rc.nameSprite.material.dispose(); } catch (e) {}
+      rc.nameSprite = null;
+    }
+  } catch (e) { }
+}
+
 // createCarMesh: prefer design-driven creation; fall back to a simple primitive
 function createCarMesh(color = 0xff3333) {
   try {
@@ -375,7 +490,40 @@ if (colorPicker) {
     sendImmediateState();
   });
 }
-// ensure initial tint applied
+
+// name input wiring
+const nameInput = document.getElementById('nameInput');
+if (nameInput) {
+  try { nameInput.value = localName; } catch (e) {}
+  nameInput.addEventListener('input', (ev) => {
+    const v = ev.target.value.slice(0,10);
+    localName = v;
+    try { localStorage.setItem('player_name', localName); } catch (e) {}
+    // Do not display the local player's name above their own car — only broadcast it to other players
+    // notify server of typed change (but we'll only force rename when user presses button)
+    // we still update localName; sendImmediateState is not required here
+  });
+}
+
+// rename button explicitly sends a rename request so all players refresh immediately
+const renameBtn = document.getElementById('renameBtn');
+if (renameBtn) {
+  renameBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    const nameToSend = (typeof localName === 'string') ? localName.trim().slice(0,10) : null;
+    if (!wsClient || wsClient.readyState !== WebSocket.OPEN) {
+      // still persist name locally
+      try { localStorage.setItem('player_name', localName); } catch (e) {}
+      return;
+    }
+    const msg = { type: 'rename', name: nameToSend };
+    try { console.debug('sending rename', msg); wsClient.send(JSON.stringify(msg)); } catch (e) { console.warn('rename send failed', e); }
+    // also send full state for redundancy
+    sendImmediateState();
+  });
+}
+
+// ensure initial tint applied (do not display own name locally)
 applyTintToMesh(car, localSkin);
 
 // World and chunk manager placeholders (initialized after server init)
@@ -510,6 +658,13 @@ function animate() {
             if (wnode.userData.rim) wnode.userData.rim.rotation.x += rc.speed * dt * wheelFactor;
           }
         }
+      }
+    } catch (e) {}
+    // update remote name sprite position smoothly
+    try {
+      if (rc.nameSprite) {
+        const target = new THREE.Vector3().copy(rc.mesh.position).add(new THREE.Vector3(0, 2.2, 0));
+        rc.nameSprite.position.lerp(target, 0.2);
       }
     } catch (e) {}
   }

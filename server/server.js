@@ -39,16 +39,40 @@ wss.on('connection', (ws, req) => {
   ws.on('message', (msg) => {
     try {
       const data = JSON.parse(msg.toString());
-      if (data && data.type === 'state') {
-        // store latest state for broadcasting (including optional skin metadata)
+      if (!data || !data.type) return;
+
+      if (data.type === 'state') {
+        // sanitize and store latest state for broadcasting (including optional skin and name metadata)
+        // sanitize name: string, trim, remove control chars, limit to 10 chars
+        let name = null;
+        if (typeof data.name !== 'undefined' && data.name !== null) {
+          try {
+            name = String(data.name).replace(/[\r\n\t\0\x0B]/g, ' ').trim().slice(0, 10);
+          } catch (e) { name = null; }
+        }
         states.set(id, {
           id,
           t: data.t || Date.now(),
           p: data.p || [0,0,0],
           rotY: typeof data.rotY === 'number' ? data.rotY : 0,
           speed: typeof data.speed === 'number' ? data.speed : 0,
-          skin: typeof data.skin !== 'undefined' ? data.skin : null
+          skin: typeof data.skin !== 'undefined' ? data.skin : null,
+          name: name
         });
+      } else if (data.type === 'rename' || data.type === 'name_update') {
+        // explicit rename request: sanitize and update stored state, then broadcast immediately
+        let name = null;
+        if (typeof data.name !== 'undefined' && data.name !== null) {
+          try {
+            name = String(data.name).replace(/[\r\n\t\0\x0B]/g, ' ').trim().slice(0, 10);
+          } catch (e) { name = null; }
+        }
+        const prev = states.get(id) || { id, p: [0,0,0], rotY: 0, speed: 0, t: Date.now(), skin: null };
+        prev.name = name;
+        prev.t = Date.now();
+        states.set(id, prev);
+        // broadcast immediately
+        broadcastStates();
       }
     } catch (e) {
       console.warn('failed to parse message from', id, e);
@@ -67,18 +91,23 @@ wss.on('connection', (ws, req) => {
   });
 });
 
-// Broadcast loop: aggregate and send player states at ~15Hz
-const TICK_MS = 66;
-setInterval(() => {
+// Broadcast helper: aggregate current states and send update to all clients
+function broadcastStates() {
   if (states.size === 0) return;
   const players = [];
   for (const [id, s] of states) {
-    players.push({ id: s.id, p: s.p, rotY: s.rotY, speed: s.speed, t: s.t, skin: s.skin });
+    players.push({ id: s.id, p: s.p, rotY: s.rotY, speed: s.speed, t: s.t, skin: s.skin, name: s.name });
   }
   const msg = JSON.stringify({ type: 'update', players });
   for (const [id, obj] of clients) {
     try { obj.ws.send(msg); } catch (e) { }
   }
+}
+
+// Broadcast loop: aggregate and send player states at ~15Hz
+const TICK_MS = 66;
+setInterval(() => {
+  broadcastStates();
 }, TICK_MS);
 
 server.listen(PORT, () => {
