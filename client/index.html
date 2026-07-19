@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>tsadarsh.com — Car Simulator (MVP)</title>
+    <style>
+      html,body { margin:0; height:100%; }
+      #ui { position: absolute; right: 12px; bottom: 12px; display:flex; gap:6px; }
+      .btn { width:48px; height:48px; background:rgba(255,255,255,0.85); border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:18px; user-select:none; }
+      #info { position: absolute; left:12px; top:12px; background: rgba(0,0,0,0.35); color:#fff; padding:6px 10px; border-radius:6px; font-family:monospace; }
+      canvas { display:block; }
+    </style>
+  </head>
+  <body>
+    <div id="info">Connecting...</div>
+    <div id="hud" style="position:absolute; left:12px; bottom:12px; color:#fff; font-family:monospace; background:rgba(0,0,0,0.2); padding:6px 8px; border-radius:6px;">
+      <div id="speed">Speed: 0.00</div>
+      <button id="respawn" style="margin-top:6px;padding:6px 8px;border-radius:4px;">Respawn</button>
+    </div>
+    <div id="ui">
+      <div class="btn" id="up">▲</div>
+      <div class="btn" id="left">◀</div>
+      <div class="btn" id="right">▶</div>
+      <div class="btn" id="down">▼</div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
