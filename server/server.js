@@ -50,6 +50,19 @@ wss.on('connection', (ws, req) => {
             name = String(data.name).replace(/[\r\n\t\0\x0B]/g, ' ').trim().slice(0, 10);
           } catch (e) { name = null; }
         }
+        // sanitize hornProfile if present (allow simple { type, freq, duration })
+        let hornProfile = null;
+        if (data.hornProfile && typeof data.hornProfile === 'object') {
+          try {
+            const t = typeof data.hornProfile.type === 'string' ? data.hornProfile.type.slice(0,16) : null;
+            const f = typeof data.hornProfile.freq === 'number' ? Number(data.hornProfile.freq) : null;
+            const d = typeof data.hornProfile.duration === 'number' ? Number(data.hornProfile.duration) : null;
+            hornProfile = { };
+            if (t) hornProfile.type = t;
+            if (f) hornProfile.freq = f;
+            if (d) hornProfile.duration = d;
+          } catch (e) { hornProfile = null; }
+        }
         states.set(id, {
           id,
           t: data.t || Date.now(),
@@ -57,7 +70,8 @@ wss.on('connection', (ws, req) => {
           rotY: typeof data.rotY === 'number' ? data.rotY : 0,
           speed: typeof data.speed === 'number' ? data.speed : 0,
           skin: typeof data.skin !== 'undefined' ? data.skin : null,
-          name: name
+          name: name,
+          hornProfile: hornProfile
         });
       } else if (data.type === 'rename' || data.type === 'name_update') {
         // explicit rename request: sanitize and update stored state, then broadcast immediately
@@ -74,8 +88,11 @@ wss.on('connection', (ws, req) => {
         // broadcast immediately
         broadcastStates();
       } else if (data.type === 'horn') {
-        // client triggered horn; broadcast horn event to all clients
-        const hmsg = JSON.stringify({ type: 'horn', id, t: Date.now() });
+        // client triggered horn; broadcast horn event to all clients. Include the sender's hornProfile if available.
+        const s = states.get(id) || null;
+        const hmsgObj = { type: 'horn', id, t: Date.now() };
+        if (s && s.hornProfile) hmsgObj.hornProfile = s.hornProfile;
+        const hmsg = JSON.stringify(hmsgObj);
         for (const [otherId, obj] of clients) {
           try { obj.ws.send(hmsg); } catch (e) { }
         }
@@ -102,7 +119,7 @@ function broadcastStates() {
   if (states.size === 0) return;
   const players = [];
   for (const [id, s] of states) {
-    players.push({ id: s.id, p: s.p, rotY: s.rotY, speed: s.speed, t: s.t, skin: s.skin, name: s.name });
+    players.push({ id: s.id, p: s.p, rotY: s.rotY, speed: s.speed, t: s.t, skin: s.skin, name: s.name, hornProfile: s.hornProfile || null });
   }
   const msg = JSON.stringify({ type: 'update', players });
   for (const [id, obj] of clients) {

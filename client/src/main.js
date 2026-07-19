@@ -15,11 +15,32 @@ const remoteCars = new Map(); // id -> { mesh, targetPos: Vector3, targetRotY, s
 let localSkin = (typeof localStorage !== 'undefined' ? localStorage.getItem('car_color') : null) || '#ff3333';
 let localName = (typeof localStorage !== 'undefined' ? localStorage.getItem('player_name') : null) || ('Player' + Math.floor(Math.random()*90+10));
 
+let localHornProfile = null;
+
+function idToSeed(id) {
+  if (!id) return Math.floor(Math.random() * 0xffffffff);
+  // FNV-1a 32-bit
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h >>> 0;
+}
+function makeHornProfileFromSeed(seed) {
+  const waveforms = ['sine','triangle','sawtooth','square'];
+  const wf = waveforms[seed % waveforms.length];
+  const freq = 320 + (seed % 280); // 320 - 599
+  const duration = 0.18 + ((seed >>> 8) % 320) / 1000; // 0.18 - 0.5
+  return { type: wf, freq, duration };
+}
+
 function sendImmediateState() {
   if (!wsClient || wsClient.readyState !== WebSocket.OPEN || !clientId) return;
   const nameToSend = (typeof localName === 'string') ? localName.trim().slice(0,10) : null;
+  if (!localHornProfile && clientId) localHornProfile = makeHornProfileFromSeed(idToSeed(clientId));
   const msg = {
-    type: 'state', id: clientId, t: Date.now(), p: [state.pos.x, state.pos.y, state.pos.z], rotY: state.rotY, speed: state.speed, skin: localSkin, name: nameToSend
+    type: 'state', id: clientId, t: Date.now(), p: [state.pos.x, state.pos.y, state.pos.z], rotY: state.rotY, speed: state.speed, skin: localSkin, name: nameToSend, hornProfile: localHornProfile
   };
   try { console.debug('immediate send state', msg); wsClient.send(JSON.stringify(msg)); } catch (e) { console.warn('immediate send failed', e); }
 }
@@ -78,8 +99,14 @@ function connectWS() {
       } else if (msg.type === 'horn') {
         // play horn sound for the reporting client (show everyone including sender)
         try {
-          // optionally access msg.id or msg.src
-          playHorn();
+          // try to use hornProfile from the message, otherwise lookup stored remote profile
+          const srcId = msg.id;
+          let profile = null;
+          if (msg.hornProfile) profile = msg.hornProfile;
+          else if (remoteCars.has(srcId)) profile = remoteCars.get(srcId).hornProfile || remoteCars.get(srcId).mesh?.userData?.hornProfile;
+          // fallback: derive from id
+          if (!profile) profile = makeHornProfileFromSeed(idToSeed(srcId));
+          playHorn({ id: srcId, ...profile });
         } catch (e) {}
       } else if (msg.type === 'update') {
         // update other players
@@ -99,7 +126,12 @@ function connectWS() {
             try { rc.mesh.userData = rc.mesh.userData || {}; rc.mesh.userData.skin = remoteSkin; } catch(e){}
             // apply reported name for remote players (create separate sprite)
             try { if (p.name) setRemoteCarName(rc, p.name); } catch(e){}
+            // store horn profile if present
+            try { rc.hornProfile = p.hornProfile || null; if (rc.hornProfile) rc.mesh.userData.hornProfile = rc.hornProfile; } catch(e){}
             remoteCars.set(p.id, rc);
+          } else {
+            // update stored horn profile
+            try { if (p.hornProfile) { rc.hornProfile = p.hornProfile; rc.mesh.userData.hornProfile = p.hornProfile; } } catch(e){}
           }
           // if server/client didn't include proper Y, compute from world height
           let py = p.p[1];
@@ -172,7 +204,8 @@ function startStateSender() {
       rotY: state.rotY,
       speed: state.speed,
       skin: localSkin,
-      name: (typeof localName === 'string') ? localName.trim().slice(0,10) : null
+      name: (typeof localName === 'string') ? localName.trim().slice(0,10) : null,
+      hornProfile: (localHornProfile) ? localHornProfile : (clientId ? makeHornProfileFromSeed(idToSeed(clientId)) : null)
     };
     try { console.debug('sending state', msg); wsClient.send(JSON.stringify(msg)); } catch (e) { console.warn('send failed', e); }
   }, 66); // ~15Hz
@@ -396,26 +429,58 @@ function ensureAudioContext() {
 }
 
 function playHorn(opts = {}) {
+  // opts may include: id, type, freq, duration
   const ctx = ensureAudioContext();
   if (!ctx) return;
   const now = ctx.currentTime;
-  const duration = typeof opts.duration === 'number' ? opts.duration : 1.40;
-  const gain = ctx.createGain();
-  const osc = ctx.createOscillator();
-  osc.type = 'cos';
-  // two-tone effect via frequency glide
-  const base = typeof opts.freq === 'number' ? opts.freq : 400;
-  osc.frequency.setValueAtTime(base * 0.95, now);
-  osc.frequency.linearRampToValueAtTime(base * 1.25, now + duration * 0.6);
-  gain.gain.setValueAtTime(0, now);
-  gain.gain.linearRampToValueAtTime(0.7, now + 0.02);
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
-  osc.connect(gain);
-  gain.connect(ctx.destination);
-  osc.start(now);
-  osc.stop(now + duration + 0.02);
-  // cleanup
-  setTimeout(() => { try { osc.disconnect(); gain.disconnect(); } catch (e) {} }, (duration + 0.05) * 1000);
+  const profile = (opts.hornProfile) ? opts.hornProfile : (opts.type || opts.freq || opts.duration ? { type: opts.type, freq: opts.freq, duration: opts.duration } : null);
+  let type = 'sine', freq = 420, duration = 0.28;
+  if (profile && typeof profile === 'object') {
+    if (typeof profile.type === 'string') type = profile.type;
+    if (typeof profile.freq === 'number') freq = profile.freq;
+    if (typeof profile.duration === 'number') duration = profile.duration;
+  } else if (opts.id) {
+    // derive deterministic profile from id if needed
+    const seed = idToSeed(opts.id);
+    const p = makeHornProfileFromSeed(seed);
+    type = p.type; freq = p.freq; duration = p.duration;
+  } else {
+    // fallback local profile
+    if (localHornProfile) { type = localHornProfile.type; freq = localHornProfile.freq; duration = localHornProfile.duration; }
+  }
+
+  // create main and sub oscillators for richer tone
+  const main = ctx.createOscillator();
+  main.type = type;
+  main.frequency.setValueAtTime(freq * 0.95, now);
+  main.frequency.linearRampToValueAtTime(freq * 1.2, now + duration * 0.6);
+
+  const sub = ctx.createOscillator();
+  sub.type = 'sine';
+  sub.frequency.setValueAtTime(freq * 0.5, now);
+  sub.detune.setValueAtTime(((idToSeed(opts.id||'') >>> 0) % 41) - 20, now);
+
+  const filter = ctx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.setValueAtTime(Math.min(2400, 800 + (freq % 1600)), now);
+  filter.Q.setValueAtTime(0.8, now);
+
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, now);
+  g.gain.linearRampToValueAtTime(0.6, now + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+  main.connect(filter);
+  sub.connect(filter);
+  filter.connect(g);
+  g.connect(ctx.destination);
+
+  main.start(now);
+  sub.start(now);
+  main.stop(now + duration + 0.02);
+  sub.stop(now + duration + 0.02);
+
+  setTimeout(() => { try { main.disconnect(); sub.disconnect(); filter.disconnect(); g.disconnect(); } catch (e) {} }, (duration + 0.1) * 1000);
 }
 
 // create a simple name sprite from text (canvas texture)
@@ -849,8 +914,10 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowRight' || e.key === 'd') controls.right = true;
   // horn key: 'h'
   if (e.key === 'h' || e.key === 'H') {
-    // play locally
-    try { playHorn(); } catch (e) {}
+    // ensure server knows our horn profile
+    try { sendImmediateState(); } catch (e) {}
+    // play locally with our profile
+    try { if (!localHornProfile && clientId) localHornProfile = makeHornProfileFromSeed(idToSeed(clientId)); playHorn({ hornProfile: localHornProfile, id: clientId }); } catch (e) {}
     // send horn event to server so others hear it
     try { if (wsClient && wsClient.readyState === WebSocket.OPEN) wsClient.send(JSON.stringify({ type: 'horn' })); } catch (e) {}
   }
@@ -879,7 +946,10 @@ const hornBtn = document.getElementById('hornBtn');
 if (hornBtn) {
   hornBtn.addEventListener('pointerdown', (e) => {
     e.preventDefault();
-    try { playHorn(); } catch (e) {}
+    // ensure server (and peers) have our latest horn profile
+    try { sendImmediateState(); } catch (e) {}
+    // play locally using localHornProfile
+    try { if (!localHornProfile && clientId) localHornProfile = makeHornProfileFromSeed(idToSeed(clientId)); playHorn({ hornProfile: localHornProfile, id: clientId }); } catch (e) {}
     try { if (wsClient && wsClient.readyState === WebSocket.OPEN) wsClient.send(JSON.stringify({ type: 'horn' })); } catch (e) {}
   });
 }
