@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "vite client",
-    "build": "vite build client --outDir dist",
+    "build": "cd client && rm -rf ../dist && vite build --outDir ../dist",
     "start": "node server/server.js"
   },
   "dependencies": {
