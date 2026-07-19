@@ -1,0 +1,32 @@
+{
+  "terrain": {
+    "chunkSize": 64,
+    "spacing": 2.0,
+    "amplitude": 18.0,
+    "baseHeight": 0,
+    "noise": {
+      "frequency": 0.0025,
+      "octaves": 5,
+      "persistence": 0.45,
+      "lacunarity": 2.2,
+      "seedOffset": 4242
+    },
+    "colorRamp": [
+      { "elevation": -5, "color": "#a85222" }, 
+      { "elevation": 0, "color": "#c46a33" },  
+      { "elevation": 8, "color": "#e39b59" },  
+      { "elevation": 14, "color": "#f2c68f" }  
+    ],
+    "slopeTint": { 
+      "enabled": true, 
+      "steepColor": "#4a2e1b", 
+      "factor": 1.5 
+    },
+    "terraforms": [
+      { "op": "add", "value": 0.0, "range": [-Infinity, Infinity] }
+    ]
+  },
+  "streamingHints": {
+    "lod": "medium"
+  }
+}

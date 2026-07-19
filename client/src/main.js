@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import carDesign from './car.design.json';
+import { loadWorldDesign } from './world/designerLoader.js';
 
 const info = document.getElementById('info');
 
@@ -28,7 +29,7 @@ function connectWS() {
   wsClient.addEventListener('open', () => {
     info.textContent = 'Connected to server, waiting init...';
   });
-  wsClient.addEventListener('message', (ev) => {
+  wsClient.addEventListener('message', async (ev) => {
     try {
       const msg = JSON.parse(ev.data);
       if (msg.type === 'init') {
@@ -45,7 +46,17 @@ function connectWS() {
             if (obj.mesh.material) obj.mesh.material.dispose();
           }
           loadedChunks.clear();
-          world = createWorld(serverSeed, { chunkSize: 32, spacing: 1.0, amplitude: 3.5 });
+          // try to load a design-driven world from /src/world.design.json (if present). If not present or fails, fall back to built-in createWorld.
+          let newWorld = null;
+          try {
+            newWorld = await loadWorldDesign('/src/world.design.json', serverSeed);
+          } catch (e) { console.warn('loadWorldDesign threw', e); }
+          if (newWorld) {
+            world = newWorld;
+            console.log('Using world design from /src/world.design.json');
+          } else {
+            world = createWorld(serverSeed, { chunkSize: 32, spacing: 1.0, amplitude: 3.5 });
+          }
           // place car at spawn derived from terrain
           try {
             const sx = 0, sz = 0;
@@ -64,6 +75,12 @@ function connectWS() {
         // apply local skin to our car and notify server immediately
         try { applyTintToMesh(car, localSkin); } catch (e) {}
         sendImmediateState();
+      } else if (msg.type === 'horn') {
+        // play horn sound for the reporting client (show everyone including sender)
+        try {
+          // optionally access msg.id or msg.src
+          playHorn();
+        } catch (e) {}
       } else if (msg.type === 'update') {
         // update other players
         for (const p of msg.players) {
@@ -353,6 +370,52 @@ function applyTintToMesh(group, color) {
     }
     group.userData.skin = color;
   } catch (e) { console.warn('applyTint failed', e); }
+}
+
+// Horn audio: lightweight WebAudio synth
+const _audio = {
+  ctx: null,
+  unlocked: false
+};
+function ensureAudioContext() {
+  if (!_audio.ctx) {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      _audio.ctx = new Ctx();
+      // resume on user gesture if suspended
+      if (_audio.ctx.state === 'suspended') {
+        const resume = () => { _audio.ctx.resume().then(()=>{ _audio.unlocked = true; }).catch(()=>{}); window.removeEventListener('pointerdown', resume); window.removeEventListener('keydown', resume); };
+        window.addEventListener('pointerdown', resume);
+        window.addEventListener('keydown', resume);
+      } else {
+        _audio.unlocked = true;
+      }
+    } catch (e) { _audio.ctx = null; }
+  }
+  return _audio.ctx;
+}
+
+function playHorn(opts = {}) {
+  const ctx = ensureAudioContext();
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  const duration = typeof opts.duration === 'number' ? opts.duration : 1.40;
+  const gain = ctx.createGain();
+  const osc = ctx.createOscillator();
+  osc.type = 'cos';
+  // two-tone effect via frequency glide
+  const base = typeof opts.freq === 'number' ? opts.freq : 400;
+  osc.frequency.setValueAtTime(base * 0.95, now);
+  osc.frequency.linearRampToValueAtTime(base * 1.25, now + duration * 0.6);
+  gain.gain.setValueAtTime(0, now);
+  gain.gain.linearRampToValueAtTime(0.7, now + 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(now);
+  osc.stop(now + duration + 0.02);
+  // cleanup
+  setTimeout(() => { try { osc.disconnect(); gain.disconnect(); } catch (e) {} }, (duration + 0.05) * 1000);
 }
 
 // create a simple name sprite from text (canvas texture)
@@ -784,6 +847,13 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowDown' || e.key === 's') controls.back = true;
   if (e.key === 'ArrowLeft' || e.key === 'a') controls.left = true;
   if (e.key === 'ArrowRight' || e.key === 'd') controls.right = true;
+  // horn key: 'h'
+  if (e.key === 'h' || e.key === 'H') {
+    // play locally
+    try { playHorn(); } catch (e) {}
+    // send horn event to server so others hear it
+    try { if (wsClient && wsClient.readyState === WebSocket.OPEN) wsClient.send(JSON.stringify({ type: 'horn' })); } catch (e) {}
+  }
 });
 window.addEventListener('keyup', (e) => {
   if (e.key === 'ArrowUp' || e.key === 'w') controls.forward = false;
@@ -803,6 +873,16 @@ bindBtn('up','forward');
 bindBtn('down','back');
 bindBtn('left','left');
 bindBtn('right','right');
+
+// horn button wiring
+const hornBtn = document.getElementById('hornBtn');
+if (hornBtn) {
+  hornBtn.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    try { playHorn(); } catch (e) {}
+    try { if (wsClient && wsClient.readyState === WebSocket.OPEN) wsClient.send(JSON.stringify({ type: 'horn' })); } catch (e) {}
+  });
+}
 
 // prevent page scrolling when using arrows
 window.addEventListener('keydown', (e) => {

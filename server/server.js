@@ -73,6 +73,12 @@ wss.on('connection', (ws, req) => {
         states.set(id, prev);
         // broadcast immediately
         broadcastStates();
+      } else if (data.type === 'horn') {
+        // client triggered horn; broadcast horn event to all clients
+        const hmsg = JSON.stringify({ type: 'horn', id, t: Date.now() });
+        for (const [otherId, obj] of clients) {
+          try { obj.ws.send(hmsg); } catch (e) { }
+        }
       }
     } catch (e) {
       console.warn('failed to parse message from', id, e);
