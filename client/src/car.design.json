@@ -1,0 +1,182 @@
+{
+  "name": "lowpoly-sports-car",
+  "units": 1,
+  "materials": {
+    "body_paint": {
+      "color": "#0077ff",
+      "metalness": 0.3,
+      "roughness": 0.4,
+      "flatShading": true,
+      "tintable": true
+    },
+    "glass": {
+      "color": "#111a22",
+      "metalness": 0.8,
+      "roughness": 0.1,
+      "opacity": 0.8,
+      "transparent": true
+    },
+    "tire_rubber": {
+      "color": "#1a1a1a",
+      "metalness": 0.1,
+      "roughness": 0.9,
+      "flatShading": true
+    },
+    "headlight_glow": {
+      "color": "#ffffff",
+      "metalness": 0.0,
+      "roughness": 1.0,
+      "flatShading": true
+    },
+    "taillight_glow": {
+      "color": "#ff1111",
+      "metalness": 0.0,
+      "roughness": 1.0,
+      "flatShading": true
+    },
+    "grill_plastic": {
+      "color": "#0a0a0a",
+      "metalness": 0.1,
+      "roughness": 0.8,
+      "flatShading": true
+    },
+    "spoiler_paint": {
+      "color": "#222222",
+      "metalness": 0.3,
+      "roughness": 0.4,
+      "flatShading": true
+    }
+  },
+  "parts": [
+    {
+      "id": "chassis",
+      "type": "box",
+      "params": { "sx": 1.8, "sy": 0.5, "sz": 4.2 },
+      "pos": [0, 0.5, 0],
+      "material": "body_paint"
+    },
+    {
+      "id": "cabin",
+      "type": "box",
+      "params": { "sx": 1.4, "sy": 0.6, "sz": 2.2 },
+      "pos": [0, 1.05, -0.2],
+      "material": "body_paint"
+    },
+    {
+      "id": "windshield",
+      "type": "box",
+      "params": { "sx": 1.2, "sy": 0.4, "sz": 0.05 },
+      "pos": [0, 1.05, 0.92],
+      "material": "glass"
+    },
+    {
+      "id": "rear_window",
+      "type": "box",
+      "params": { "sx": 1.2, "sy": 0.35, "sz": 0.05 },
+      "pos": [0, 1.05, -1.32],
+      "material": "glass"
+    },
+    {
+      "id": "side_window_l",
+      "type": "box",
+      "params": { "sx": 0.05, "sy": 0.4, "sz": 1.6 },
+      "pos": [-0.72, 1.05, -0.2],
+      "material": "glass"
+    },
+    {
+      "id": "side_window_r",
+      "type": "box",
+      "params": { "sx": 0.05, "sy": 0.4, "sz": 1.6 },
+      "pos": [0.72, 1.05, -0.2],
+      "material": "glass"
+    },
+    {
+      "id": "front_grill",
+      "type": "box",
+      "params": { "sx": 1.0, "sy": 0.2, "sz": 0.05 },
+      "pos": [0, 0.4, 2.12],
+      "material": "grill_plastic"
+    },
+    {
+      "id": "headlight_l",
+      "type": "box",
+      "params": { "sx": 0.3, "sy": 0.15, "sz": 0.05 },
+      "pos": [-0.6, 0.55, 2.11],
+      "material": "headlight_glow"
+    },
+    {
+      "id": "headlight_r",
+      "type": "box",
+      "params": { "sx": 0.3, "sy": 0.15, "sz": 0.05 },
+      "pos": [0.6, 0.55, 2.11],
+      "material": "headlight_glow"
+    },
+    {
+      "id": "taillight_l",
+      "type": "box",
+      "params": { "sx": 0.4, "sy": 0.15, "sz": 0.05 },
+      "pos": [-0.6, 0.6, -2.11],
+      "material": "taillight_glow"
+    },
+    {
+      "id": "taillight_r",
+      "type": "box",
+      "params": { "sx": 0.4, "sy": 0.15, "sz": 0.05 },
+      "pos": [0.6, 0.6, -2.11],
+      "material": "taillight_glow"
+    },
+    {
+      "id": "spoiler_mount_l",
+      "type": "box",
+      "params": { "sx": 0.05, "sy": 0.2, "sz": 0.1 },
+      "pos": [-0.6, 0.85, -1.9],
+      "material": "spoiler_paint"
+    },
+    {
+      "id": "spoiler_mount_r",
+      "type": "box",
+      "params": { "sx": 0.05, "sy": 0.2, "sz": 0.1 },
+      "pos": [0.6, 0.85, -1.9],
+      "material": "spoiler_paint"
+    },
+    {
+      "id": "spoiler_wing",
+      "type": "box",
+      "params": { "sx": 1.6, "sy": 0.05, "sz": 0.3 },
+      "pos": [0, 0.95, -1.95],
+      "material": "spoiler_paint"
+    },
+    {
+      "id": "wheel_fl",
+      "type": "cylinder",
+      "params": { "radiusTop": 0.35, "radiusBottom": 0.35, "height": 0.25, "radialSegments": 12, "axis": "x" },
+      "pos": [-0.9, 0.35, 1.3],
+      "material": "tire_rubber",
+      "meta": { "role": "wheel", "side": "front-left", "steer": true }
+    },
+    {
+      "id": "wheel_fr",
+      "type": "cylinder",
+      "params": { "radiusTop": 0.35, "radiusBottom": 0.35, "height": 0.25, "radialSegments": 12, "axis": "x" },
+      "pos": [0.9, 0.35, 1.3],
+      "material": "tire_rubber",
+      "meta": { "role": "wheel", "side": "front-right", "steer": true }
+    },
+    {
+      "id": "wheel_rl",
+      "type": "cylinder",
+      "params": { "radiusTop": 0.35, "radiusBottom": 0.35, "height": 0.25, "radialSegments": 12, "axis": "x" },
+      "pos": [-0.9, 0.35, -1.3],
+      "material": "tire_rubber",
+      "meta": { "role": "wheel", "side": "rear-left" }
+    },
+    {
+      "id": "wheel_rr",
+      "type": "cylinder",
+      "params": { "radiusTop": 0.35, "radiusBottom": 0.35, "height": 0.25, "radialSegments": 12, "axis": "x" },
+      "pos": [0.9, 0.35, -1.3],
+      "material": "tire_rubber",
+      "meta": { "role": "wheel", "side": "rear-right" }
+    }
+  ]
+}

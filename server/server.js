@@ -40,13 +40,14 @@ wss.on('connection', (ws, req) => {
     try {
       const data = JSON.parse(msg.toString());
       if (data && data.type === 'state') {
-        // store latest state for broadcasting
+        // store latest state for broadcasting (including optional skin metadata)
         states.set(id, {
           id,
           t: data.t || Date.now(),
           p: data.p || [0,0,0],
           rotY: typeof data.rotY === 'number' ? data.rotY : 0,
-          speed: typeof data.speed === 'number' ? data.speed : 0
+          speed: typeof data.speed === 'number' ? data.speed : 0,
+          skin: typeof data.skin !== 'undefined' ? data.skin : null
         });
       }
     } catch (e) {
@@ -72,7 +73,7 @@ setInterval(() => {
   if (states.size === 0) return;
   const players = [];
   for (const [id, s] of states) {
-    players.push({ id: s.id, p: s.p, rotY: s.rotY, speed: s.speed, t: s.t });
+    players.push({ id: s.id, p: s.p, rotY: s.rotY, speed: s.speed, t: s.t, skin: s.skin });
   }
   const msg = JSON.stringify({ type: 'update', players });
   for (const [id, obj] of clients) {

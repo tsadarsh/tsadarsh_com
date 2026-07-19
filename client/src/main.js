@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import carDesign from './car.design.json';
 
 const info = document.getElementById('info');
 
@@ -9,6 +10,16 @@ let serverSeed = null;
 
 let wsClient = null;
 const remoteCars = new Map(); // id -> { mesh, targetPos: Vector3, targetRotY, speed }
+// local skin color (hex). persisted in localStorage
+let localSkin = (typeof localStorage !== 'undefined' ? localStorage.getItem('car_color') : null) || '#ff3333';
+
+function sendImmediateState() {
+  if (!wsClient || wsClient.readyState !== WebSocket.OPEN || !clientId) return;
+  const msg = {
+    type: 'state', id: clientId, t: Date.now(), p: [state.pos.x, state.pos.y, state.pos.z], rotY: state.rotY, speed: state.speed, skin: localSkin
+  };
+  try { wsClient.send(JSON.stringify(msg)); } catch (e) {}
+}
 
 function connectWS() {
   wsClient = new WebSocket(WS_URL);
@@ -48,16 +59,23 @@ function connectWS() {
         }
         // start sending our state periodically
         startStateSender();
+        // apply local skin to our car and notify server immediately
+        try { applyTintToMesh(car, localSkin); } catch (e) {}
+        sendImmediateState();
       } else if (msg.type === 'update') {
         // update other players
         for (const p of msg.players) {
           if (p.id === clientId) continue; // skip self
           let rc = remoteCars.get(p.id);
           if (!rc) {
-            // create remote car mesh (use same low-poly model with different color)
-            const g = createCarMesh(0x3366ff);
+            // create remote car mesh using reported skin color if present
+            let remoteSkin = '#3366ff';
+            if (p.skin) remoteSkin = (typeof p.skin === 'string') ? p.skin : ('#' + (Number(p.skin)).toString(16).padStart(6,'0'));
+            const g = createCarMesh(remoteSkin);
             scene.add(g);
             rc = { mesh: g, targetPos: new THREE.Vector3(), targetRotY: 0, speed: 0 };
+            // store reported skin
+            try { rc.mesh.userData = rc.mesh.userData || {}; rc.mesh.userData.skin = remoteSkin; } catch(e){}
             remoteCars.set(p.id, rc);
           }
           // if server/client didn't include proper Y, compute from world height
@@ -72,6 +90,15 @@ function connectWS() {
           }
           rc.targetRotY = p.rotY;
           rc.speed = p.speed;
+          // update remote skin if it changed
+          try {
+            let remoteSkin = p.skin || null;
+            if (remoteSkin && typeof remoteSkin !== 'string') remoteSkin = '#' + (Number(remoteSkin)).toString(16).padStart(6,'0');
+            if (remoteSkin && rc.mesh && rc.mesh.userData && rc.mesh.userData.skin !== remoteSkin) {
+              applyTintToMesh(rc.mesh, remoteSkin);
+              rc.mesh.userData.skin = remoteSkin;
+            }
+          } catch (e) {}
         }
       } else if (msg.type === 'leave') {
         const id = msg.id;
@@ -105,9 +132,10 @@ function startStateSender() {
       t: Date.now(),
       p: [state.pos.x, state.pos.y, state.pos.z],
       rotY: state.rotY,
-      speed: state.speed
+      speed: state.speed,
+      skin: localSkin
     };
-    wsClient.send(JSON.stringify(msg));
+    try { wsClient.send(JSON.stringify(msg)); } catch (e) {}
   }, 66); // ~15Hz
 }
 
@@ -162,40 +190,193 @@ const lm3 = new THREE.Mesh(new THREE.BoxGeometry(1,2,1), landmarkMat.clone());
 lm3.position.set(0,1,-15);
 scene.add(lm3);
 
-// create a low-poly car procedurally
-function createCarMesh(color = 0xff3333) {
+// Build a THREE.Group from a car design JSON
+function buildCarFromDesign(design, tintColor) {
   const group = new THREE.Group();
-  // body
-  const bodyMat = new THREE.MeshStandardMaterial({ color: color, flatShading: true });
-  const bodyGeo = new THREE.BoxGeometry(1.6, 0.4, 0.9);
-  const bodyMesh = new THREE.Mesh(bodyGeo, bodyMat);
-  bodyMesh.position.y = 0.3;
-  group.add(bodyMesh);
-  // cabin (slightly lighter tint)
-  const cabinColor = typeof color === 'number' ? (color + 0x333333) & 0xffffff : 0xff6666;
-  const cabinMat = new THREE.MeshStandardMaterial({ color: cabinColor, flatShading: true });
-  const cabinGeo = new THREE.BoxGeometry(0.9, 0.35, 0.7);
-  const cabin = new THREE.Mesh(cabinGeo, cabinMat);
-  cabin.position.set(0, 0.55, -0.05);
-  group.add(cabin);
-  // wheels (simple cylinders)
-  const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
-  const wheelGeo = new THREE.CylinderGeometry(0.18, 0.18, 0.12, 6);
-  function makeWheel(x, z) {
-    const w = new THREE.Mesh(wheelGeo, wheelMat);
-    w.rotation.z = Math.PI / 2;
-    w.position.set(x, 0.12, z);
-    return w;
+  group.name = design.name || 'car_from_design';
+
+  // materials
+  const mats = {};
+  const defs = design.materials || {};
+  const tintMats = [];
+  for (const key of Object.keys(defs)) {
+    const d = defs[key];
+    const mat = new THREE.MeshStandardMaterial({
+      color: d.color || 0x999999,
+      metalness: typeof d.metalness === 'number' ? d.metalness : 0.2,
+      roughness: typeof d.roughness === 'number' ? d.roughness : 0.6,
+      flatShading: !!d.flatShading,
+      transparent: !!d.transparent,
+      opacity: typeof d.opacity === 'number' ? d.opacity : 1.0
+    });
+    // mark tintable on material userdata so it can be updated later
+    if (d.tintable) {
+      mat.userData = mat.userData || {};
+      mat.userData.tintable = true;
+      tintMats.push(mat);
+      // apply initial tint override if provided
+      if (typeof tintColor !== 'undefined') {
+        try { mat.color.set(tintColor); } catch (e) {}
+      }
+    }
+    mats[key] = mat;
   }
-  group.add(makeWheel(0.7, 0.35));
-  group.add(makeWheel(-0.7, 0.35));
-  group.add(makeWheel(0.7, -0.35));
-  group.add(makeWheel(-0.7, -0.35));
+
+  const wheels = [];
+  const named = {};
+
+  // helper to create primitive
+  function createPart(part) {
+    const type = part.type || 'box';
+    let mesh = null;
+    if (type === 'box') {
+      const p = part.params || {};
+      const sx = p.sx || 1, sy = p.sy || 1, sz = p.sz || 1;
+      mesh = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mats[part.material] || new THREE.MeshStandardMaterial({ color: 0x888888 }));
+    } else if (type === 'cylinder') {
+      const p = part.params || {};
+      const rTop = p.radiusTop || 0.2, rBot = p.radiusBottom || rTop, h = p.height || 0.2, seg = p.radialSegments || 8;
+      mesh = new THREE.Mesh(new THREE.CylinderGeometry(rTop, rBot, h, seg), mats[part.material] || new THREE.MeshStandardMaterial({ color: 0x444444 }));
+      // cylinder is Y-axis by default; rotate if needed
+      const axis = (p.axis || 'y').toLowerCase();
+      if (axis === 'x') mesh.rotation.z = Math.PI / 2;
+      else if (axis === 'z') mesh.rotation.x = Math.PI / 2;
+    } else if (type === 'plane') {
+      const p = part.params || {};
+      const w = p.width || 1, h = p.height || 1;
+      mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mats[part.material] || new THREE.MeshStandardMaterial({ color: 0x888888 }));
+    } else if (type === 'sphere') {
+      const p = part.params || {};
+      mesh = new THREE.Mesh(new THREE.SphereGeometry(p.radius || 0.5, p.widthSegments || 8, p.heightSegments || 6), mats[part.material] || new THREE.MeshStandardMaterial({ color: 0x888888 }));
+    } else if (type === 'custom') {
+      const p = part.params || {};
+      const pos = p.positions || [];
+      const idx = p.indices || [];
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+      if (idx && idx.length) geom.setIndex(new THREE.BufferAttribute(new Uint16Array(idx), 1));
+      if (p.normals) geom.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(p.normals), 3));
+      mesh = new THREE.Mesh(geom, mats[part.material] || new THREE.MeshStandardMaterial({ color: 0x888888 }));
+    }
+
+    if (!mesh) return null;
+
+    // apply transforms
+    if (part.pos) mesh.position.set(part.pos[0] || 0, part.pos[1] || 0, part.pos[2] || 0);
+    if (part.rot) mesh.rotation.set(part.rot[0] || 0, part.rot[1] || 0, part.rot[2] || 0);
+    if (part.scale) mesh.scale.set(part.scale[0] || 1, part.scale[1] || 1, part.scale[2] || 1);
+
+    // collect wheels
+    if (part.meta && part.meta.role === 'wheel') {
+      // wrap wheel mesh in a group to match prior expectations (userData.wheel, userData.rim)
+      const wp = new THREE.Group();
+      mesh.rotation.x = mesh.rotation.x || 0; // ensure rotation exists
+      // put wheel mesh as child at origin so rotation will spin correctly
+      mesh.position.set(0, 0, 0);
+      wp.add(mesh);
+      // add a simple rim (small scaled cylinder) for visual
+      const rim = null; // optional: could add rim here
+      wp.position.set(part.pos ? part.pos[0] || 0 : 0, part.pos ? part.pos[1] || 0 : 0, part.pos ? part.pos[2] || 0 : 0);
+      wp.userData = { wheel: mesh };
+      if (rim) wp.userData.rim = rim;
+      // mark steering
+      if (part.meta && part.meta.steer) wp.userData.steer = true;
+      wheels.push(wp);
+      named[part.id] = wp;
+      return wp;
+    }
+
+    named[part.id] = mesh;
+    return mesh;
+  }
+
+  // create all parts and add to group
+  for (const part of design.parts || []) {
+    try {
+      const node = createPart(part);
+      if (!node) continue;
+      group.add(node);
+    } catch (e) {
+      console.warn('Failed to create part', part.id, e);
+    }
+  }
+
+  group.userData.wheels = wheels;
+  group.userData.named = named;
+  group.userData.tintMaterials = tintMats;
   return group;
 }
 
-const car = createCarMesh(0xff3333);
+// helper to set tint on an instantiated car mesh/group
+function applyTintToMesh(group, color) {
+  if (!group) return;
+  try {
+    // if buildCarFromDesign stored tintMaterials, use them
+    if (group.userData && Array.isArray(group.userData.tintMaterials) && group.userData.tintMaterials.length) {
+      for (const m of group.userData.tintMaterials) {
+        try { m.color.set(color); } catch (e) {}
+      }
+    } else {
+      // traverse and find materials with userData.tintable
+      group.traverse((node) => {
+        if (node.isMesh && node.material) {
+          const mats = Array.isArray(node.material) ? node.material : [node.material];
+          for (const mat of mats) {
+            if (mat && mat.userData && mat.userData.tintable) {
+              try { mat.color.set(color); } catch (e) {}
+            }
+          }
+        }
+      });
+    }
+    group.userData.skin = color;
+  } catch (e) { console.warn('applyTint failed', e); }
+}
+
+// createCarMesh: prefer design-driven creation; fall back to a simple primitive
+function createCarMesh(color = 0xff3333) {
+  try {
+    if (typeof carDesign !== 'undefined' && carDesign && carDesign.parts) {
+      const g = buildCarFromDesign(carDesign, color);
+      // ensure userData.skin is set
+      g.userData = g.userData || {};
+      g.userData.skin = color;
+      return g;
+    }
+  } catch (e) {
+    console.warn('car design build failed, falling back', e);
+  }
+  // fallback simple box car
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.4, 0.9), new THREE.MeshStandardMaterial({ color: color, flatShading: true }));
+  body.position.y = 0.35;
+  g.add(body);
+  const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+  const wgeo = new THREE.CylinderGeometry(0.18, 0.18, 0.12, 6);
+  function mw(x,z){ const m = new THREE.Mesh(wgeo, wheelMat); m.rotation.z = Math.PI/2; m.position.set(x,0.12,z); const gp = new THREE.Group(); gp.add(m); gp.userData = { wheel: m }; g.add(gp); g.userData = g.userData || {}; if(!g.userData.wheels) g.userData.wheels = []; g.userData.wheels.push(gp); }
+  mw(0.7,0.35); mw(-0.7,0.35); mw(0.7,-0.35); mw(-0.7,-0.35);
+  g.userData = g.userData || {};
+  g.userData.skin = color;
+  return g;
+}
+
+const car = createCarMesh(localSkin);
 scene.add(car);
+// apply persisted color to picker UI and wire events
+const colorPicker = document.getElementById('colorPicker');
+if (colorPicker) {
+  try { colorPicker.value = localSkin; } catch (e) {}
+  colorPicker.addEventListener('input', (ev) => {
+    const v = ev.target.value;
+    localSkin = v;
+    try { localStorage.setItem('car_color', localSkin); } catch (e) {}
+    applyTintToMesh(car, localSkin);
+    // notify server of skin change immediately
+    sendImmediateState();
+  });
+}
+// ensure initial tint applied
+applyTintToMesh(car, localSkin);
 
 // World and chunk manager placeholders (initialized after server init)
 const loadedChunks = new Map(); // key -> { mesh }
@@ -288,6 +469,19 @@ function animate() {
   updatePhysics(dt);
   car.position.copy(state.pos);
   car.rotation.y = state.rotY;
+  // rotate wheels based on forward speed for local car (simple visual)
+  try {
+    const wheelFactor = 2.8; // visual speed -> wheel rotation factor
+    if (car.userData?.wheels && Array.isArray(car.userData.wheels)) {
+      for (const wnode of car.userData.wheels) {
+        // rotate the wheel mesh (the actual cylinder is child 0 of wheel group)
+        if (wnode && wnode.userData && wnode.userData.wheel) {
+          wnode.userData.wheel.rotation.x += state.speed * dt * wheelFactor;
+          if (wnode.userData.rim) wnode.userData.rim.rotation.x += state.speed * dt * wheelFactor;
+        }
+      }
+    }
+  } catch (e) { /* ignore if no wheels */ }
 
   // maybe update chunks periodically
   lastChunkUpdate += dt * 1000;
@@ -306,6 +500,18 @@ function animate() {
     while (delta > Math.PI) delta -= Math.PI * 2;
     while (delta < -Math.PI) delta += Math.PI * 2;
     rc.mesh.rotation.y = a + delta * 0.2;
+    // animate wheels for remote cars as well (based on reported speed)
+    try {
+      const wheelFactor = 2.8;
+      if (rc.mesh.userData?.wheels && Array.isArray(rc.mesh.userData.wheels)) {
+        for (const wnode of rc.mesh.userData.wheels) {
+          if (wnode && wnode.userData && wnode.userData.wheel) {
+            wnode.userData.wheel.rotation.x += rc.speed * dt * wheelFactor;
+            if (wnode.userData.rim) wnode.userData.rim.rotation.x += rc.speed * dt * wheelFactor;
+          }
+        }
+      }
+    } catch (e) {}
   }
 
   // camera follow (smoothing)
